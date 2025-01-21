@@ -1,0 +1,191 @@
+{% extends 'base.html' %}
+
+{% block title %}ChatterBox - Chat Rooms{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h3 mb-1">Chat Rooms</h1>
+            <p class="text-muted mb-0">Join a room or create your own to start chatting</p>
+        </div>
+        <button class="btn btn-primary d-flex align-items-center gap-2" data-bs-toggle="modal" data-bs-target="#createRoomModal">
+            <i class="bi bi-plus-lg"></i>
+            Create Room
+        </button>
+    </div>
+
+    <div class="room-list">
+        {% for room in rooms %}
+        <div class="card room-card mb-3">
+            <div class="card-body d-flex justify-content-between align-items-center">
+                <div>
+                    <h5 class="card-title mb-1">
+                        <i class="bi bi-chat-square-text me-2 text-primary"></i>
+                        {{ room.title }}
+                    </h5>
+                    <small class="text-muted d-flex align-items-center">
+                        <i class="bi bi-people me-1"></i>
+                        <span id="participant-count-{{ room.id }}">0 participants</span>
+                    </small>
+                </div>
+                <a href="{% url 'room_detail' room.id %}" class="btn btn-primary d-flex align-items-center gap-2">
+                    <i class="bi bi-box-arrow-in-right"></i> Join Chat
+                </a>
+            </div>
+        </div>
+        {% empty %}
+        <div class="text-center py-5">
+            <i class="bi bi-chat-square-dots display-1 text-muted mb-3"></i>
+            <h3>No Chat Rooms Yet</h3>
+            <p class="text-muted">Create your first room to start chatting!</p>
+            <button class="btn btn-primary mt-3" data-bs-toggle="modal" data-bs-target="#createRoomModal">
+                <i class="bi bi-plus-lg me-2"></i> Create First Room
+            </button>
+        </div>
+        {% endfor %}
+    </div>
+
+    <!-- Create Room Modal -->
+    <div class="modal fade" id="createRoomModal" tabindex="-1">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title">
+                        <i class="bi bi-plus-circle me-2"></i>
+                        Create New Room
+                    </h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <form method="post">
+                    {% csrf_token %}
+                    <div class="modal-body">
+                        <div class="mb-3">
+                            <label for="room-title" class="form-label">Room Title</label>
+                            <input type="text" class="form-control" id="room-title" name="title" required 
+                                   placeholder="Enter a name for your chat room">
+                        </div>
+                    </div>
+                    <div class="modal-footer">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary d-flex align-items-center gap-2">
+                            <i class="bi bi-plus-lg"></i> Create Room
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<style>
+    .room-card {
+        transition: transform 0.2s;
+        border-radius: 12px;
+        border: none;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+
+    .room-card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+    }
+
+    .room-card .card-body {
+        padding: 1.25rem;
+    }
+
+    .room-card .btn {
+        border-radius: 8px;
+    }
+
+    .room-card .card-title {
+        display: flex;
+        align-items: center;
+    }
+
+    .room-card .card-title i {
+        font-size: 1.25rem;
+    }
+
+    .gap-2 {
+        gap: 0.5rem !important;
+    }
+
+    .modal-content {
+        border: none;
+        border-radius: 12px;
+    }
+
+    .modal-header {
+        border-bottom: 1px solid rgba(0,0,0,0.08);
+    }
+
+    .modal-footer {
+        border-top: 1px solid rgba(0,0,0,0.08);
+    }
+</style>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Connect to WebSocket for each room to get participant count updates
+    {% for room in rooms %}
+    (function(roomId) {
+        let socket = null;
+        let reconnectAttempts = 0;
+        const maxReconnectAttempts = 5;
+        
+        function connect() {
+            if (socket && socket.readyState !== WebSocket.CLOSED) {
+                return;  // Already connected or connecting
+            }
+            
+            socket = new WebSocket(
+                'ws://' + window.location.host + '/ws/chat/' + roomId + '/'
+            );
+
+            socket.onmessage = function(e) {
+                const data = JSON.parse(e.data);
+                if (data.type === 'participant_update') {
+                    const countElement = document.getElementById('participant-count-' + roomId);
+                    if (countElement) {
+                        const count = data.count;
+                        countElement.textContent = `${count} participant${count !== 1 ? 's' : ''}`;
+                    }
+                }
+            };
+
+            socket.onclose = function(e) {
+                console.log('Room list socket closed for room ' + roomId);
+                
+                // Try to reconnect with exponential backoff
+                if (reconnectAttempts < maxReconnectAttempts) {
+                    const delay = Math.min(1000 * Math.pow(2, reconnectAttempts), 30000);
+                    console.log(`Attempting to reconnect in ${delay}ms...`);
+                    setTimeout(() => {
+                        reconnectAttempts++;
+                        connect();
+                    }, delay);
+                }
+            };
+
+            socket.onerror = function(err) {
+                console.error('WebSocket error for room ' + roomId + ':', err);
+            };
+        }
+
+        // Initial connection
+        connect();
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (socket) {
+                socket.close();
+            }
+        });
+    })({{ room.id }});
+    {% endfor %}
+</script>
+{% endblock %}
